@@ -1,7 +1,7 @@
 import { useState, useEffect, useCallback } from 'react'
 import { BarChart3, X, ChevronLeft, ChevronRight, ZoomIn } from 'lucide-react'
 
-const API = 'http://localhost:8000'
+const API = import.meta.env.VITE_API_URL || 'http://localhost:8000'
 
 const LABELS = {
   hist:    'Distribution',
