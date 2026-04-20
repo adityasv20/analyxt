@@ -3,7 +3,7 @@ import axios from 'axios'
 import ReactMarkdown from 'react-markdown'
 import { Send, Loader2, MessageSquare, Database, Sparkles, Bot, User, X, Trash2 } from 'lucide-react'
 
-const API = 'http://localhost:8000'
+const API = import.meta.env.VITE_API_URL || 'http://localhost:8000'
 
 const SUGGESTIONS = [
   'What are the key statistics?',

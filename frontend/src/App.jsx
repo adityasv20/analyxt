@@ -17,7 +17,7 @@ import EmailForm from './components/EmailForm'
 
 import { BarChart3, RefreshCw, MessageSquare, ChevronRight } from 'lucide-react'
 
-const API = 'http://localhost:8000'
+const API = import.meta.env.VITE_API_URL || 'http://localhost:8000'
 
 export default function App() {
   const [file, setFile] = useState(null)

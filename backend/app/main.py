@@ -40,9 +40,22 @@ for d in ["uploads", "outputs", "outputs/charts"]:
 # ── App ───────────────────────────────────────────────────────────────────────
 app = FastAPI(title="Analyzt", version="2.0.0")
 
+frontend_origins = [
+    "http://localhost:5173",
+    "http://localhost:3000",
+]
+configured_frontend = os.getenv("FRONTEND_URL", "").strip()
+if configured_frontend:
+    frontend_origins.extend(
+        origin.strip()
+        for origin in configured_frontend.split(",")
+        if origin.strip()
+    )
+frontend_origins = list(dict.fromkeys(frontend_origins))
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:5173", "http://localhost:3000"],
+    allow_origins=frontend_origins,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
