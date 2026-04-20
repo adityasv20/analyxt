@@ -111,7 +111,7 @@ export default function App() {
           <div className="space-y-8 anim-fade-up">
             <div className="text-center space-y-3 pt-6">
               <p className="text-[11px] font-mono text-cyan-100/70 tracking-[0.35em] uppercase">
-                AI · pandas · gemini or groq
+                AI · pandas · groq
               </p>
               <h1 className="font-serif italic text-5xl md:text-6xl text-white leading-none">
                 Data, understood.
@@ -219,8 +219,8 @@ export default function App() {
       {!result && !loading && (
         <footer className="border-t border-white/8 py-4 shrink-0">
           <div className="max-w-[1700px] mx-auto px-6 flex items-center justify-between">
-            <p className="text-[11px] text-slate-500 font-mono">Analyzt v2 · FastAPI + React + Gemini or Groq</p>
-            <p className="text-[11px] text-slate-600">local MVP</p>
+            <p className="text-[11px] text-slate-500 font-mono">Analyzt v2 · FastAPI + React + Groq</p>
+            <p className="text-[11px] text-slate-600">Built by Aditya Velagapudi</p>
           </div>
         </footer>
       )}
