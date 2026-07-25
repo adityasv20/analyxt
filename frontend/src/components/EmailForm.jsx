@@ -61,9 +61,6 @@ export default function EmailForm({ reportFilename }) {
               <AlertTriangle size={11} className="shrink-0 mt-0.5" /> {error}
             </div>
           )}
-          <p className="text-[10px] text-slate-500 font-mono">
-            Requires SMTP config in backend/.env
-          </p>
         </div>
       )}
     </div>
