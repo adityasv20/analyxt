@@ -116,27 +116,36 @@ def _findings_to_html(findings: list[dict], limit: int = 12) -> str:
     return "".join(rows)
 
 
-def _charts_to_html(chart_paths: list[str]) -> str:
+def _charts_to_html(chart_paths: list[str]) -> tuple[str, list[dict]]:
     if not chart_paths:
-        return "<p>No charts were generated for this report.</p>"
+        return "<p>No charts were generated for this report.</p>", []
 
     parts = []
-    for chart_path in chart_paths[:6]:
+    inline_attachments = []
+    for idx, chart_path in enumerate(chart_paths[:6], start=1):
         local_path = chart_path.lstrip("/")
         if not os.path.exists(local_path):
             continue
         with open(local_path, "rb") as f:
             b64 = base64.b64encode(f.read()).decode("ascii")
+        cid = f"chart_{idx}"
+        inline_attachments.append({
+            "ContentType": "image/png",
+            "Filename": os.path.basename(local_path),
+            "ContentID": cid,
+            "Base64Content": b64,
+        })
         parts.append(
             "<div class='chart-card'>"
             f"<div class='chart-title'>{html.escape(_chart_label(chart_path))}</div>"
-            f"<img src='data:image/png;base64,{b64}' alt='{html.escape(_chart_label(chart_path))}' />"
+            f"<img src='cid:{cid}' alt='{html.escape(_chart_label(chart_path))}' />"
             "</div>"
         )
-    return "".join(parts) or "<p>No charts were generated for this report.</p>"
+    html_out = "".join(parts) or "<p>No charts were generated for this report.</p>"
+    return html_out, inline_attachments
 
 
-def _report_html(payload: dict) -> str:
+def _report_html(payload: dict) -> tuple[str, list[dict]]:
     overview = payload.get("overview") or {}
     findings = payload.get("findings") or []
     chart_paths = payload.get("chart_paths") or []
@@ -144,7 +153,7 @@ def _report_html(payload: dict) -> str:
     filename = payload.get("filename") or "Dataset"
     generated_at = payload.get("generated_at") or ""
 
-    charts_html = _charts_to_html(chart_paths)
+    charts_html, inline_attachments = _charts_to_html(chart_paths)
 
     missing = overview.get("missing_values") or {}
     missing_html = "".join(
@@ -354,7 +363,7 @@ def _report_html(payload: dict) -> str:
       </body>
     </html>
     """
-    return html_body
+    return html_body, inline_attachments
 
 
 def send_report_email(to_email: str, report_filename: str, subject: str) -> dict:
@@ -373,7 +382,7 @@ def send_report_email(to_email: str, report_filename: str, subject: str) -> dict
     try:
         payload, md = _load_report_payload(report_filename)
         plain = _md_to_plain(md)
-        html_body = _report_html(payload)
+        html_body, inline_attachments = _report_html(payload)
     except Exception as e:
         print(f"[emailer] report generation failed: {e}")
         return {"success": False, "error": "Could not generate the report to attach."}
@@ -401,6 +410,7 @@ def send_report_email(to_email: str, report_filename: str, subject: str) -> dict
                         "Base64Content": report_b64,
                     },
                 ],
+                "InlinedAttachments": inline_attachments,
             },
         ],
     }

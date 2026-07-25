@@ -61,6 +61,9 @@ export default function EmailForm({ reportFilename }) {
               <AlertTriangle size={11} className="shrink-0 mt-0.5" /> {error}
             </div>
           )}
+          <p className="text-[10px] text-slate-500 font-mono">
+            Don't see it? Check your spam folder.
+          </p>
         </div>
       )}
     </div>
