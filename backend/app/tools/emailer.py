@@ -1,4 +1,4 @@
-"""tools/emailer.py — Send HTML report emails via the Resend API."""
+"""tools/emailer.py — Send HTML report emails via the SendGrid API."""
 
 import base64
 import html
@@ -10,7 +10,7 @@ import urllib.request
 
 from app.config import get_env
 
-RESEND_API_URL = "https://api.resend.com/emails"
+SENDGRID_API_URL = "https://api.sendgrid.com/v3/mail/send"
 OUTPUT_DIR = "outputs"
 CHART_LABELS = {
     "hist": "Distribution",
@@ -359,13 +359,13 @@ def _report_html(payload: dict) -> str:
 
 
 def send_report_email(to_email: str, report_filename: str, subject: str) -> dict:
-    api_key = get_env("RESEND_API_KEY")
-    from_email = get_env("RESEND_FROM", "onboarding@resend.dev")
+    api_key = get_env("SENDGRID_API_KEY")
+    from_email = get_env("SENDGRID_FROM")
 
-    if not api_key:
+    if not api_key or not from_email:
         return {
             "success": False,
-            "error": "RESEND_API_KEY is missing. Set it in Render's environment variables.",
+            "error": "SENDGRID_API_KEY / SENDGRID_FROM missing. Set them in Render's environment variables.",
         }
 
     try:
@@ -378,25 +378,30 @@ def send_report_email(to_email: str, report_filename: str, subject: str) -> dict
             report_b64 = base64.b64encode(f.read()).decode("ascii")
 
         body = json.dumps({
-            "from": from_email,
-            "to": [to_email],
+            "personalizations": [{"to": [{"email": to_email}]}],
+            "from": {"email": from_email},
             "subject": subject,
-            "html": html_body,
-            "text": plain,
+            "content": [
+                {"type": "text/plain", "value": plain},
+                {"type": "text/html", "value": html_body},
+            ],
             "attachments": [
-                {"filename": report_filename, "content": report_b64},
+                {
+                    "content": report_b64,
+                    "filename": report_filename,
+                    "type": "text/markdown",
+                    "disposition": "attachment",
+                },
             ],
         }).encode("utf-8")
 
         req = urllib.request.Request(
-            RESEND_API_URL,
+            SENDGRID_API_URL,
             data=body,
             method="POST",
             headers={
                 "Authorization": f"Bearer {api_key}",
                 "Content-Type": "application/json",
-                # Cloudflare (in front of the Resend API) blocks urllib's
-                # default "Python-urllib/x.y" User-Agent as a bot signature.
                 "User-Agent": "analyzt-backend/1.0",
             },
         )
@@ -406,6 +411,6 @@ def send_report_email(to_email: str, report_filename: str, subject: str) -> dict
         return {"success": True, "error": None}
     except urllib.error.HTTPError as e:
         detail = e.read().decode("utf-8", errors="replace")
-        return {"success": False, "error": f"Resend API error ({e.code}): {detail}"}
+        return {"success": False, "error": f"SendGrid API error ({e.code}): {detail}"}
     except Exception as e:
         return {"success": False, "error": str(e)}
