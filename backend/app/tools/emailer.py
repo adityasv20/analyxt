@@ -103,6 +103,22 @@ def _findings_to_html(findings: list[dict], limit: int = 12) -> str:
     return "".join(rows)
 
 
+def _chart_attachments(chart_paths: list[str]) -> list[dict]:
+    attachments = []
+    for chart_path in chart_paths[:6]:
+        local_path = chart_path.lstrip("/")
+        if not os.path.exists(local_path):
+            continue
+        with open(local_path, "rb") as f:
+            b64 = base64.b64encode(f.read()).decode("ascii")
+        attachments.append({
+            "ContentType": "image/png",
+            "Filename": os.path.basename(local_path),
+            "Base64Content": b64,
+        })
+    return attachments
+
+
 def _report_html(payload: dict) -> str:
     overview = payload.get("overview") or {}
     findings = payload.get("findings") or []
@@ -319,6 +335,14 @@ def send_report_email(to_email: str, report_filename: str, subject: str) -> dict
         path = os.path.join(OUTPUT_DIR, report_filename)
         with open(path, "rb") as f:
             report_b64 = base64.b64encode(f.read()).decode("ascii")
+        attachments = [
+            {
+                "ContentType": "text/markdown",
+                "Filename": report_filename,
+                "Base64Content": report_b64,
+            },
+        ]
+        attachments.extend(_chart_attachments(payload.get("chart_paths") or []))
     except Exception as e:
         print(f"[emailer] attachment encoding failed: {e}")
         return {"success": False, "error": "Could not encode the report attachment."}
@@ -331,13 +355,7 @@ def send_report_email(to_email: str, report_filename: str, subject: str) -> dict
                 "Subject": subject,
                 "TextPart": plain,
                 "HTMLPart": html_body,
-                "Attachments": [
-                    {
-                        "ContentType": "text/markdown",
-                        "Filename": report_filename,
-                        "Base64Content": report_b64,
-                    },
-                ],
+                "Attachments": attachments,
             },
         ],
     }
