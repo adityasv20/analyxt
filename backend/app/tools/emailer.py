@@ -1,28 +1,16 @@
-"""tools/emailer.py — Send HTML report emails via SMTP."""
+"""tools/emailer.py — Send HTML report emails via the Resend API."""
 
+import base64
 import html
 import json
 import os
 import re
-import smtplib
-import socket
-from email import encoders
-from email.mime.base import MIMEBase
-from email.mime.image import MIMEImage
-from email.mime.multipart import MIMEMultipart
-from email.mime.text import MIMEText
+import urllib.error
+import urllib.request
 
-from app.config import ENV_PATH, get_env
+from app.config import get_env
 
-_orig_getaddrinfo = socket.getaddrinfo
-
-
-def _ipv4_only_getaddrinfo(host, port, family=0, type=0, proto=0, flags=0):
-    """Some hosts (e.g. Render) lack outbound IPv6 routes; smtplib's default
-    dual-stack lookup can pick an unreachable AAAA record and fail with
-    [Errno 101] Network is unreachable. Force IPv4 resolution instead."""
-    return _orig_getaddrinfo(host, port, socket.AF_INET, type, proto, flags)
-
+RESEND_API_URL = "https://api.resend.com/emails"
 OUTPUT_DIR = "outputs"
 CHART_LABELS = {
     "hist": "Distribution",
@@ -129,26 +117,27 @@ def _findings_to_html(findings: list[dict], limit: int = 12) -> str:
     return "".join(rows)
 
 
-def _charts_to_html(chart_paths: list[str]) -> tuple[str, list[tuple[str, str]]]:
+def _charts_to_html(chart_paths: list[str]) -> str:
     if not chart_paths:
-        return "<p>No charts were generated for this report.</p>", []
+        return "<p>No charts were generated for this report.</p>"
 
     parts = []
-    attachments = []
-    for idx, chart_path in enumerate(chart_paths[:6], start=1):
+    for chart_path in chart_paths[:6]:
         local_path = chart_path.lstrip("/")
-        cid = f"chart_{idx}"
-        attachments.append((cid, local_path))
+        if not os.path.exists(local_path):
+            continue
+        with open(local_path, "rb") as f:
+            b64 = base64.b64encode(f.read()).decode("ascii")
         parts.append(
             "<div class='chart-card'>"
             f"<div class='chart-title'>{html.escape(_chart_label(chart_path))}</div>"
-            f"<img src='cid:{cid}' alt='{html.escape(_chart_label(chart_path))}' />"
+            f"<img src='data:image/png;base64,{b64}' alt='{html.escape(_chart_label(chart_path))}' />"
             "</div>"
         )
-    return "".join(parts), attachments
+    return "".join(parts) or "<p>No charts were generated for this report.</p>"
 
 
-def _report_html(payload: dict) -> tuple[str, list[tuple[str, str]]]:
+def _report_html(payload: dict) -> str:
     overview = payload.get("overview") or {}
     findings = payload.get("findings") or []
     chart_paths = payload.get("chart_paths") or []
@@ -156,7 +145,7 @@ def _report_html(payload: dict) -> tuple[str, list[tuple[str, str]]]:
     filename = payload.get("filename") or "Dataset"
     generated_at = payload.get("generated_at") or ""
 
-    charts_html, chart_attachments = _charts_to_html(chart_paths)
+    charts_html = _charts_to_html(chart_paths)
 
     missing = overview.get("missing_values") or {}
     missing_html = "".join(
@@ -366,60 +355,57 @@ def _report_html(payload: dict) -> tuple[str, list[tuple[str, str]]]:
       </body>
     </html>
     """
-    return html_body, chart_attachments
+    return html_body
 
 
 def send_report_email(to_email: str, report_filename: str, subject: str) -> dict:
-    smtp_host = get_env("SMTP_HOST", "smtp.gmail.com")
-    smtp_port = int(get_env("SMTP_PORT", "587"))
-    smtp_user = get_env("SMTP_USER")
-    smtp_pass = get_env("SMTP_PASS")
+    api_key = get_env("RESEND_API_KEY")
+    from_email = get_env("RESEND_FROM", "onboarding@resend.dev")
 
-    if not smtp_user or not smtp_pass:
+    if not api_key:
         return {
             "success": False,
-            "error": f"SMTP credentials missing or still set to the example values in {ENV_PATH}",
+            "error": "RESEND_API_KEY is missing. Set it in Render's environment variables.",
         }
 
     try:
         payload, md = _load_report_payload(report_filename)
         plain = _md_to_plain(md)
-        html_body, chart_attachments = _report_html(payload)
-
-        msg = MIMEMultipart("mixed")
-        msg["From"], msg["To"], msg["Subject"] = smtp_user, to_email, subject
-
-        alt = MIMEMultipart("alternative")
-        alt.attach(MIMEText(plain, "plain", "utf-8"))
-        related = MIMEMultipart("related")
-        related.attach(MIMEText(html_body, "html", "utf-8"))
-        for cid, chart_path in chart_attachments:
-            if not os.path.exists(chart_path):
-                continue
-            with open(chart_path, "rb") as f:
-                img = MIMEImage(f.read())
-                img.add_header("Content-ID", f"<{cid}>")
-                img.add_header("Content-Disposition", "inline", filename=os.path.basename(chart_path))
-                related.attach(img)
-        alt.attach(related)
-        msg.attach(alt)
+        html_body = _report_html(payload)
 
         path = os.path.join(OUTPUT_DIR, report_filename)
         with open(path, "rb") as f:
-            att = MIMEBase("text", "markdown")
-            att.set_payload(f.read())
-            encoders.encode_base64(att)
-            att.add_header("Content-Disposition", f'attachment; filename="{report_filename}"')
-            msg.attach(att)
+            report_b64 = base64.b64encode(f.read()).decode("ascii")
 
-        socket.getaddrinfo = _ipv4_only_getaddrinfo
-        try:
-            with smtplib.SMTP(smtp_host, smtp_port, timeout=30) as s:
-                s.ehlo(); s.starttls(); s.login(smtp_user, smtp_pass)
-                s.sendmail(smtp_user, to_email, msg.as_string())
-        finally:
-            socket.getaddrinfo = _orig_getaddrinfo
+        body = json.dumps({
+            "from": from_email,
+            "to": [to_email],
+            "subject": subject,
+            "html": html_body,
+            "text": plain,
+            "attachments": [
+                {"filename": report_filename, "content": report_b64},
+            ],
+        }).encode("utf-8")
+
+        req = urllib.request.Request(
+            RESEND_API_URL,
+            data=body,
+            method="POST",
+            headers={
+                "Authorization": f"Bearer {api_key}",
+                "Content-Type": "application/json",
+                # Cloudflare (in front of the Resend API) blocks urllib's
+                # default "Python-urllib/x.y" User-Agent as a bot signature.
+                "User-Agent": "analyzt-backend/1.0",
+            },
+        )
+        with urllib.request.urlopen(req, timeout=30) as resp:
+            resp.read()
 
         return {"success": True, "error": None}
+    except urllib.error.HTTPError as e:
+        detail = e.read().decode("utf-8", errors="replace")
+        return {"success": False, "error": f"Resend API error ({e.code}): {detail}"}
     except Exception as e:
         return {"success": False, "error": str(e)}

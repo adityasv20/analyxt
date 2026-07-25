@@ -20,7 +20,7 @@ export default function EmailForm({ reportFilename }) {
       })
       setStatus('done')
     } catch (e) {
-      setError(e.response?.data?.detail || 'Email failed — check SMTP in .env')
+      setError(e.response?.data?.detail || 'Email failed to send')
       setStatus('error')
     }
   }
