@@ -1,16 +1,15 @@
-"""tools/emailer.py — Send HTML report emails via the SendGrid API."""
+"""tools/emailer.py — Send HTML report emails via the Mailjet API."""
 
 import base64
 import html
 import json
 import os
 import re
-import urllib.error
-import urllib.request
+
+from mailjet_rest import Client
 
 from app.config import get_env
 
-SENDGRID_API_URL = "https://api.sendgrid.com/v3/mail/send"
 OUTPUT_DIR = "outputs"
 CHART_LABELS = {
     "hist": "Distribution",
@@ -359,58 +358,73 @@ def _report_html(payload: dict) -> str:
 
 
 def send_report_email(to_email: str, report_filename: str, subject: str) -> dict:
-    api_key = get_env("SENDGRID_API_KEY")
-    from_email = get_env("SENDGRID_FROM")
+    api_key = get_env("MAILJET_API_KEY")
+    secret_key = get_env("MAILJET_SECRET_KEY")
+    sender_email = get_env("MAILJET_SENDER_EMAIL")
+    sender_name = get_env("MAILJET_SENDER_NAME", "Analyzt")
 
-    if not api_key or not from_email:
-        return {
-            "success": False,
-            "error": "SENDGRID_API_KEY / SENDGRID_FROM missing. Set them in Render's environment variables.",
-        }
+    if not api_key:
+        return {"success": False, "error": "MAILJET_API_KEY is missing. Set it in Render's environment variables."}
+    if not secret_key:
+        return {"success": False, "error": "MAILJET_SECRET_KEY is missing. Set it in Render's environment variables."}
+    if not sender_email:
+        return {"success": False, "error": "MAILJET_SENDER_EMAIL is missing. Set it in Render's environment variables."}
 
     try:
         payload, md = _load_report_payload(report_filename)
         plain = _md_to_plain(md)
         html_body = _report_html(payload)
+    except Exception as e:
+        print(f"[emailer] report generation failed: {e}")
+        return {"success": False, "error": "Could not generate the report to attach."}
 
+    try:
         path = os.path.join(OUTPUT_DIR, report_filename)
         with open(path, "rb") as f:
             report_b64 = base64.b64encode(f.read()).decode("ascii")
-
-        body = json.dumps({
-            "personalizations": [{"to": [{"email": to_email}]}],
-            "from": {"email": from_email},
-            "subject": subject,
-            "content": [
-                {"type": "text/plain", "value": plain},
-                {"type": "text/html", "value": html_body},
-            ],
-            "attachments": [
-                {
-                    "content": report_b64,
-                    "filename": report_filename,
-                    "type": "text/markdown",
-                    "disposition": "attachment",
-                },
-            ],
-        }).encode("utf-8")
-
-        req = urllib.request.Request(
-            SENDGRID_API_URL,
-            data=body,
-            method="POST",
-            headers={
-                "Authorization": f"Bearer {api_key}",
-                "Content-Type": "application/json",
-                "User-Agent": "analyzt-backend/1.0",
-            },
-        )
-        with urllib.request.urlopen(req, timeout=30) as resp:
-            resp.read()
-
-        return {"success": True, "error": None}
-    except urllib.error.HTTPError as e:
-        detail = e.read().decode("utf-8", errors="replace")
-        return {"success": False, "error": f"SendGrid API error ({e.code}): {detail}"}
     except Exception as e:
-        return {"success": False, "error": str(e)}
+        print(f"[emailer] attachment encoding failed: {e}")
+        return {"success": False, "error": "Could not encode the report attachment."}
+
+    data = {
+        "Messages": [
+            {
+                "From": {"Email": sender_email, "Name": sender_name},
+                "To": [{"Email": to_email}],
+                "Subject": subject,
+                "TextPart": plain,
+                "HTMLPart": html_body,
+                "Attachments": [
+                    {
+                        "ContentType": "text/markdown",
+                        "Filename": report_filename,
+                        "Base64Content": report_b64,
+                    },
+                ],
+            },
+        ],
+    }
+
+    try:
+        mailjet = Client(auth=(api_key, secret_key), version="v3.1")
+        result = mailjet.send.create(data=data)
+    except Exception as e:
+        print(f"[emailer] Mailjet request failed: {type(e).__name__}")
+        return {"success": False, "error": "Failed to reach Mailjet. Please try again."}
+
+    if result.status_code != 200:
+        print(f"[emailer] Mailjet API error {result.status_code}: {result.json()}")
+        return {
+            "success": False,
+            "error": f"Mailjet API error ({result.status_code}). Check your API credentials and sender verification.",
+        }
+
+    messages = result.json().get("Messages", [])
+    message_status = messages[0].get("Status") if messages else None
+    if message_status != "success":
+        errors = messages[0].get("Errors", []) if messages else []
+        print(f"[emailer] Mailjet send not successful: status={message_status} errors={errors}")
+        detail = "; ".join(err.get("ErrorMessage", "") for err in errors) or "Mailjet rejected the message."
+        return {"success": False, "error": detail}
+
+    return {"success": True, "error": None}
