@@ -5,6 +5,7 @@ import json
 import os
 import re
 import smtplib
+import socket
 from email import encoders
 from email.mime.base import MIMEBase
 from email.mime.image import MIMEImage
@@ -12,6 +13,15 @@ from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
 
 from app.config import ENV_PATH, get_env
+
+_orig_getaddrinfo = socket.getaddrinfo
+
+
+def _ipv4_only_getaddrinfo(host, port, family=0, type=0, proto=0, flags=0):
+    """Some hosts (e.g. Render) lack outbound IPv6 routes; smtplib's default
+    dual-stack lookup can pick an unreachable AAAA record and fail with
+    [Errno 101] Network is unreachable. Force IPv4 resolution instead."""
+    return _orig_getaddrinfo(host, port, socket.AF_INET, type, proto, flags)
 
 OUTPUT_DIR = "outputs"
 CHART_LABELS = {
@@ -402,9 +412,13 @@ def send_report_email(to_email: str, report_filename: str, subject: str) -> dict
             att.add_header("Content-Disposition", f'attachment; filename="{report_filename}"')
             msg.attach(att)
 
-        with smtplib.SMTP(smtp_host, smtp_port) as s:
-            s.ehlo(); s.starttls(); s.login(smtp_user, smtp_pass)
-            s.sendmail(smtp_user, to_email, msg.as_string())
+        socket.getaddrinfo = _ipv4_only_getaddrinfo
+        try:
+            with smtplib.SMTP(smtp_host, smtp_port, timeout=30) as s:
+                s.ehlo(); s.starttls(); s.login(smtp_user, smtp_pass)
+                s.sendmail(smtp_user, to_email, msg.as_string())
+        finally:
+            socket.getaddrinfo = _orig_getaddrinfo
 
         return {"success": True, "error": None}
     except Exception as e:
