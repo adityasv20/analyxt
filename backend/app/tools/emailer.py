@@ -11,14 +11,6 @@ from mailjet_rest import Client
 from app.config import get_env
 
 OUTPUT_DIR = "outputs"
-CHART_LABELS = {
-    "hist": "Distribution",
-    "corr": "Correlation Matrix",
-    "cat": "Category Breakdown",
-    "box": "Box Plot",
-    "scatter": "Scatter Plot",
-    "missing": "Missing Values",
-}
 
 
 def _md_to_plain(md: str) -> str:
@@ -30,11 +22,6 @@ def _md_to_plain(md: str) -> str:
     text = re.sub(r"`(.*?)`", r"\1", text)
     text = re.sub(r"\n{3,}", "\n\n", text)
     return text.strip()
-
-
-def _chart_label(path: str) -> str:
-    stem = os.path.basename(path).split("_")[0]
-    return CHART_LABELS.get(stem, stem.title())
 
 
 def _load_report_payload(report_filename: str) -> tuple[dict, str]:
@@ -116,44 +103,12 @@ def _findings_to_html(findings: list[dict], limit: int = 12) -> str:
     return "".join(rows)
 
 
-def _charts_to_html(chart_paths: list[str]) -> tuple[str, list[dict]]:
-    if not chart_paths:
-        return "<p>No charts were generated for this report.</p>", []
-
-    parts = []
-    inline_attachments = []
-    for idx, chart_path in enumerate(chart_paths[:6], start=1):
-        local_path = chart_path.lstrip("/")
-        if not os.path.exists(local_path):
-            continue
-        with open(local_path, "rb") as f:
-            b64 = base64.b64encode(f.read()).decode("ascii")
-        cid = f"chart_{idx}"
-        inline_attachments.append({
-            "ContentType": "image/png",
-            "Filename": os.path.basename(local_path),
-            "ContentID": cid,
-            "Base64Content": b64,
-        })
-        parts.append(
-            "<div class='chart-card'>"
-            f"<div class='chart-title'>{html.escape(_chart_label(chart_path))}</div>"
-            f"<img src='cid:{cid}' alt='{html.escape(_chart_label(chart_path))}' />"
-            "</div>"
-        )
-    html_out = "".join(parts) or "<p>No charts were generated for this report.</p>"
-    return html_out, inline_attachments
-
-
-def _report_html(payload: dict) -> tuple[str, list[dict]]:
+def _report_html(payload: dict) -> str:
     overview = payload.get("overview") or {}
     findings = payload.get("findings") or []
-    chart_paths = payload.get("chart_paths") or []
     summary = payload.get("llm_summary") or ""
     filename = payload.get("filename") or "Dataset"
     generated_at = payload.get("generated_at") or ""
-
-    charts_html, inline_attachments = _charts_to_html(chart_paths)
 
     missing = overview.get("missing_values") or {}
     missing_html = "".join(
@@ -289,28 +244,6 @@ def _report_html(payload: dict) -> tuple[str, list[dict]]:
             font-size: 12px;
             color: #64748b;
           }}
-          .charts {{
-            display: grid;
-            grid-template-columns: repeat(2, minmax(0, 1fr));
-            gap: 14px;
-          }}
-          .chart-card {{
-            background: #f8fbff;
-            border: 1px solid #dce8f3;
-            border-radius: 18px;
-            padding: 12px;
-          }}
-          .chart-title {{
-            font-size: 13px;
-            font-weight: 700;
-            color: #0b3954;
-            margin-bottom: 10px;
-          }}
-          .chart-card img {{
-            width: 100%;
-            border-radius: 12px;
-            display: block;
-          }}
           .footer {{
             margin-top: 14px;
             text-align: center;
@@ -349,11 +282,6 @@ def _report_html(payload: dict) -> tuple[str, list[dict]]:
           </div>
 
           <div class="section">
-            <h2>Charts</h2>
-            <div class="charts">{charts_html}</div>
-          </div>
-
-          <div class="section">
             <h2>Top Findings</h2>
             {_findings_to_html(findings)}
           </div>
@@ -363,7 +291,7 @@ def _report_html(payload: dict) -> tuple[str, list[dict]]:
       </body>
     </html>
     """
-    return html_body, inline_attachments
+    return html_body
 
 
 def send_report_email(to_email: str, report_filename: str, subject: str) -> dict:
@@ -382,7 +310,7 @@ def send_report_email(to_email: str, report_filename: str, subject: str) -> dict
     try:
         payload, md = _load_report_payload(report_filename)
         plain = _md_to_plain(md)
-        html_body, inline_attachments = _report_html(payload)
+        html_body = _report_html(payload)
     except Exception as e:
         print(f"[emailer] report generation failed: {e}")
         return {"success": False, "error": "Could not generate the report to attach."}
@@ -410,7 +338,6 @@ def send_report_email(to_email: str, report_filename: str, subject: str) -> dict
                         "Base64Content": report_b64,
                     },
                 ],
-                "InlinedAttachments": inline_attachments,
             },
         ],
     }
