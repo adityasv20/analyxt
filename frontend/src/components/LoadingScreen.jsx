@@ -59,7 +59,7 @@ export default function LoadingScreen() {
         })}
       </div>
 
-      <p className="text-xs text-slate-500 font-mono">Usually under 20 seconds</p>
+      <p className="text-xs text-slate-500 font-mono">Usually under 10 seconds</p>
     </div>
   )
 }
